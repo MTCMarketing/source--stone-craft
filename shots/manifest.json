@@ -1,0 +1,12 @@
+{
+  "desktop": {
+    "width": 2160,
+    "height": 17433,
+    "tiles": 12
+  },
+  "mobile": {
+    "width": 780,
+    "height": 35908,
+    "tiles": 10
+  }
+}

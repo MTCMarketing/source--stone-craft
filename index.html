@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StoneCraft — website mockup</title>
+<meta name="description" content="Website mockup prepared for StoneCraft.">
+<meta name="robots" content="noindex, nofollow">
+<meta property="og:title" content="StoneCraft — website mockup">
+<meta property="og:description" content="A first look at the site.">
+<meta property="og:image" content="shots/desktop-1.jpg">
+
+<style>
+  /*
+    A presentation surface, not a website.
+    Dark and quiet on purpose: the mockup should be the only bright thing on
+    the screen, and the frame around it should say "this is a design we made
+    for you" rather than "this is a site that already exists".
+  */
+  :root {
+    --ink: #0c0e11;
+    --panel: #15181d;
+    --line: #272c33;
+    --text: #e9ebee;
+    --muted: #98a1ab;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ink);
+    color: var(--text);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* The two states, declared before everything that reacts to them.
+     Radios, so the toggle still works with JavaScript switched off. */
+  #desktop, #mobile { position: absolute; opacity: 0; pointer-events: none; }
+
+  header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 13px 20px;
+    border-bottom: 1px solid var(--line);
+    background: rgb(12 14 17 / 88%);
+    backdrop-filter: blur(10px);
+  }
+
+  .who { display: flex; align-items: center; gap: 11px; min-width: 0; }
+
+  .mark {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    background: #fff;
+    color: #0c0e11;
+    font-size: 12px;
+    font-weight: 800;
+  }
+
+  .who b { display: block; font-size: 14.5px; }
+  .who i { display: block; color: var(--muted); font-size: 11.5px; font-style: normal; }
+
+  .views {
+    display: inline-flex;
+    gap: 3px;
+    padding: 4px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: var(--panel);
+  }
+
+  .views label {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 15px;
+    border-radius: 8px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    user-select: none;
+    transition: background .15s, color .15s;
+  }
+
+  .views label:hover { color: var(--text); }
+  .views svg { width: 15px; height: 15px; }
+
+  #desktop:checked ~ header .pick-desktop,
+  #mobile:checked  ~ header .pick-mobile {
+    background: #fff;
+    color: #0c0e11;
+  }
+
+  main { padding: 26px 20px 64px; }
+  .stage { margin: 0 auto; transition: max-width .25s ease; }
+  #desktop:checked ~ main .stage { max-width: 1140px; }
+  #mobile:checked  ~ main .stage { max-width: 380px; }
+
+  /* The frame is what makes a flat screenshot read as a thing on a device. */
+  .frame {
+    overflow: hidden;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    box-shadow: 0 28px 80px rgb(0 0 0 / 55%);
+  }
+
+  #desktop:checked ~ main .frame { border-radius: 12px; }
+  #mobile:checked  ~ main .frame { border-radius: 38px; border-width: 2px; padding: 11px; }
+
+  .bar { display: flex; align-items: center; gap: 7px; padding: 11px 14px; border-bottom: 1px solid var(--line); }
+  .bar i { width: 11px; height: 11px; border-radius: 50%; }
+  .bar i:nth-of-type(1) { background: #ff5f57; }
+  .bar i:nth-of-type(2) { background: #febc2e; }
+  .bar i:nth-of-type(3) { background: #28c840; }
+
+  .bar .url {
+    flex: 1;
+    min-width: 0;
+    margin-left: 8px;
+    padding: 5px 12px;
+    overflow: hidden;
+    border-radius: 7px;
+    background: #0f1216;
+    color: var(--muted);
+    font-size: 11.5px;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .notch { width: 108px; height: 5px; margin: 1px auto 10px; border-radius: 99px; background: #2c323a; }
+
+  #mobile:checked  ~ main .bar { display: none; }
+  #desktop:checked ~ main .notch { display: none; }
+
+  /*
+    THE SHOT IS TILES, NOT ONE IMAGE.
+
+    A full-page screenshot of a long site is enormous in PIXELS even when it
+    is small in bytes — the desktop one is 2200x6311, nearly 14 megapixels —
+    and iOS Safari will not decode an image that big inline. It draws the
+    alt text and a broken-image glyph instead, while a long press still
+    previews it, because the preview path has no such budget. That is the
+    bug that was reported, and it is why this is sliced.
+
+    Each tile is under 3.5 megapixels. They stack with no gap: block
+    display, no baseline space, and a width that is exactly 100% of the
+    same box, so the seams are invisible.
+  */
+  .reel { display: block; font-size: 0; line-height: 0; }
+  .reel img { display: block; width: 100%; height: auto; }
+  #mobile:checked ~ main .reel { border-radius: 27px; overflow: hidden; }
+
+  #desktop:checked ~ main .reel-mobile { display: none; }
+  #mobile:checked  ~ main .reel-desktop { display: none; }
+
+  .note { max-width: 620px; margin: 24px auto 0; color: var(--muted); font-size: 12.5px; line-height: 1.7; text-align: center; }
+
+  @media (max-width: 560px) {
+    header { padding: 11px 14px; }
+    .views label { padding: 8px 12px; }
+    .views label span { display: none; }
+    main { padding: 18px 12px 44px; }
+  }
+</style>
+</head>
+<body>
+
+<input type="radio" name="view" id="desktop" checked>
+<input type="radio" name="view" id="mobile">
+
+<script>
+  /*
+    Show the visitor the version that matches the screen they are holding.
+    A phone opening this should land on the phone view, not on a desktop
+    shot shrunk to thumbnail size.
+
+    Inline and immediately after the inputs, so it runs before the first
+    paint and there is no flash of the wrong view. If it never runs, the
+    radios above still work by hand — this only picks the better default.
+  */
+  try {
+    if (window.matchMedia('(max-width: 820px)').matches) {
+      document.getElementById('mobile').checked = true;
+    }
+  } catch (e) { /* the manual toggle still works */ }
+</script>
+
+<header>
+  <div class="who">
+    <span class="mark">SC</span>
+    <span>
+      <b>StoneCraft</b>
+      <i>Website mockup &middot; Concrete &amp; Countertops</i>
+    </span>
+  </div>
+
+  <div class="views" role="group" aria-label="View">
+    <label class="pick-desktop" for="desktop">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+      </svg>
+      <span>Desktop</span>
+    </label>
+    <label class="pick-mobile" for="mobile">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/>
+      </svg>
+      <span>Mobile</span>
+    </label>
+  </div>
+</header>
+
+<main>
+  <div class="stage">
+    <div class="frame">
+      <div class="bar">
+        <i></i><i></i><i></i>
+        <span class="url">stonecraftonline.com</span>
+      </div>
+      <div class="notch"></div>
+
+      <!-- Eager and sync on purpose: nothing here is below the fold in any
+           meaningful sense, and lazy decoding is one of the things that was
+           suspected of hiding the shot. -->
+      <div class="reel reel-desktop">
+        <picture><source srcset="shots/desktop-1.avif" type="image/avif"><img src="shots/desktop-1.jpg" alt="The StoneCraft website on a desktop screen" loading="eager" decoding="sync" width="2160" height="1500"></picture>
+        <picture><source srcset="shots/desktop-2.avif" type="image/avif"><img src="shots/desktop-2.jpg" alt="" loading="eager" decoding="sync" width="2160" height="1500"></picture>
+        <picture><source srcset="shots/desktop-3.avif" type="image/avif"><img src="shots/desktop-3.jpg" alt="" loading="eager" decoding="sync" width="2160" height="1500"></picture>
+        <picture><source srcset="shots/desktop-4.avif" type="image/avif"><img src="shots/desktop-4.jpg" alt="" loading="eager" decoding="sync" width="2160" height="1500"></picture>
+        <picture><source srcset="shots/desktop-5.avif" type="image/avif"><img src="shots/desktop-5.jpg" alt="" loading="eager" decoding="sync" width="2160" height="1500"></picture>
+        <picture><source srcset="shots/desktop-6.avif" type="image/avif"><img src="shots/desktop-6.jpg" alt="" loading="eager" decoding="sync" width="2160" height="1500"></picture>
+        <picture><source srcset="shots/desktop-7.avif" type="image/avif"><img src="shots/desktop-7.jpg" alt="" loading="eager" decoding="sync" width="2160" height="1500"></picture>
+        <picture><source srcset="shots/desktop-8.avif" type="image/avif"><img src="shots/desktop-8.jpg" alt="" loading="eager" decoding="sync" width="2160" height="1500"></picture>
+        <picture><source srcset="shots/desktop-9.avif" type="image/avif"><img src="shots/desktop-9.jpg" alt="" loading="eager" decoding="sync" width="2160" height="1500"></picture>
+        <picture><source srcset="shots/desktop-10.avif" type="image/avif"><img src="shots/desktop-10.jpg" alt="" loading="eager" decoding="sync" width="2160" height="1500"></picture>
+        <picture><source srcset="shots/desktop-11.avif" type="image/avif"><img src="shots/desktop-11.jpg" alt="" loading="eager" decoding="sync" width="2160" height="1500"></picture>
+        <picture><source srcset="shots/desktop-12.avif" type="image/avif"><img src="shots/desktop-12.jpg" alt="" loading="eager" decoding="sync" width="2160" height="933"></picture>
+      </div>
+
+      <div class="reel reel-mobile">
+        <picture><source srcset="shots/mobile-1.avif" type="image/avif"><img src="shots/mobile-1.jpg" alt="The StoneCraft website on a phone" loading="eager" decoding="sync" width="780" height="3600"></picture>
+        <picture><source srcset="shots/mobile-2.avif" type="image/avif"><img src="shots/mobile-2.jpg" alt="" loading="eager" decoding="sync" width="780" height="3600"></picture>
+        <picture><source srcset="shots/mobile-3.avif" type="image/avif"><img src="shots/mobile-3.jpg" alt="" loading="eager" decoding="sync" width="780" height="3600"></picture>
+        <picture><source srcset="shots/mobile-4.avif" type="image/avif"><img src="shots/mobile-4.jpg" alt="" loading="eager" decoding="sync" width="780" height="3600"></picture>
+        <picture><source srcset="shots/mobile-5.avif" type="image/avif"><img src="shots/mobile-5.jpg" alt="" loading="eager" decoding="sync" width="780" height="3600"></picture>
+        <picture><source srcset="shots/mobile-6.avif" type="image/avif"><img src="shots/mobile-6.jpg" alt="" loading="eager" decoding="sync" width="780" height="3600"></picture>
+        <picture><source srcset="shots/mobile-7.avif" type="image/avif"><img src="shots/mobile-7.jpg" alt="" loading="eager" decoding="sync" width="780" height="3600"></picture>
+        <picture><source srcset="shots/mobile-8.avif" type="image/avif"><img src="shots/mobile-8.jpg" alt="" loading="eager" decoding="sync" width="780" height="3600"></picture>
+        <picture><source srcset="shots/mobile-9.avif" type="image/avif"><img src="shots/mobile-9.jpg" alt="" loading="eager" decoding="sync" width="780" height="3600"></picture>
+        <picture><source srcset="shots/mobile-10.avif" type="image/avif"><img src="shots/mobile-10.jpg" alt="" loading="eager" decoding="sync" width="780" height="3508"></picture>
+      </div>
+    </div>
+
+    <p class="note">
+      A first look &mdash; nothing here is final. Colors, photos and wording can all change.
+    </p>
+  </div>
+</main>
+
+<script>
+  /* Says that somebody opened this, so the page's owner is told while the client is looking.
+
+     Only the site name, the page and where they came from are sent. The visitor's address is read
+     by the server from the connection and checked there against the blacklist (so our own opens
+     are not reported); no key or rule is held in this page. Silent on failure: a visitor never
+     sees an error because the notification could not be sent. */
+  (function () {
+    try {
+      fetch("https://logs.mockup.wiki/visitors/visit", {
+        method: 'POST',
+        keepalive: true,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          site: "stonecraft",
+          path: location.pathname,
+          referrer: document.referrer
+        })
+      }).catch(function () {});
+    } catch (e) {}
+  })();
+</script>
+
+</body>
+</html>

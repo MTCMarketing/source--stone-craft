@@ -1,0 +1,19 @@
+{
+  "name": "stonecraft",
+  "private": true,
+  "description": "Website for StoneCraft: concrete countertops, polished concrete floors and more in Buxton, Maine.",
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "scripts": {
+    "develop": "gatsby develop",
+    "start": "gatsby develop",
+    "build": "gatsby build",
+    "serve": "gatsby serve",
+    "clean": "gatsby clean"
+  },
+  "dependencies": {
+    "gatsby": "^5.16.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}
