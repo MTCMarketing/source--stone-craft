@@ -1,0 +1,1070 @@
+# =========================================
+# SOURCE: universal
+# VERSION: 5.1
+#
+# DEPLOYMENT TAGS
+#
+# Production:
+#   [deploy:live]
+#
+# Preview:
+#   [deploy:prev]
+#
+# Mockup using a mockup.wiki subdomain:
+#   [deploy:mock] [subdomain:bravo-roofing-v4]
+#
+# Mockup using a complete custom domain:
+#   [deploy:mock] [domain:demo.example.com]
+#
+# AUTHENTICATION TEST TAGS
+#
+#   [deploy:auth-live]
+#   [deploy:auth-prev]
+#   [deploy:auth-mock] [subdomain:bravo-roofing-v4]
+#   [deploy:auth-mock] [domain:demo.example.com]
+#
+# Explicitly skip deployment:
+#   [deploy:false]
+#
+# ACTIONS SECRETS
+#
+#   ACTIONS_DEPLOY_LIVE
+#   ACTIONS_DEPLOY_PREV
+#   ACTIONS_DEPLOY_MOCK
+#
+# ACTIONS VARIABLES
+#
+#   LIVE_DEPLOY_REPO
+#   LIVE_WEBSITE_DOMAIN
+#
+#   PREV_DEPLOY_REPO
+#   PREV_WEBSITE_DOMAIN
+#   PREV_REPO_EXISTS
+#
+#   MOCK_DEPLOY_REPO
+#   MOCK_BASE_DOMAIN
+#   MOCK_REPO_EXISTS
+#
+# =========================================
+
+name: Build and Deploy Gatsby V5
+
+on:
+  push:
+    branches:
+      - main
+
+  workflow_dispatch:
+    inputs:
+      deploy_target:
+        description: "Deployment target"
+        required: true
+        type: choice
+        options:
+          - live
+          - prev
+          - auth-live
+          - auth-prev
+          - mock
+          - auth-mock
+      mock_domain:
+        description: "Mock subdomain or full domain (used only for mock/auth-mock)"
+        required: false
+        type: string
+
+env:
+  # =========================================
+  # SWITCHES
+  # =========================================
+  PREV_REPO_EXISTS: ${{ vars.PREV_REPO_EXISTS }}
+  MOCK_REPO_EXISTS: ${{ vars.MOCK_REPO_EXISTS }}
+
+  # =========================================
+  # DESTINATION REPOSITORIES
+  # =========================================
+  LIVE_DEPLOY_REPO: ${{ vars.LIVE_DEPLOY_REPO }}
+  PREV_DEPLOY_REPO: ${{ vars.PREV_DEPLOY_REPO }}
+  MOCK_DEPLOY_REPO: ${{ vars.MOCK_DEPLOY_REPO }}
+
+  # =========================================
+  # WEBSITE DOMAINS
+  # =========================================
+  LIVE_WEBSITE_DOMAIN: ${{ vars.LIVE_WEBSITE_DOMAIN }}
+  PREV_WEBSITE_DOMAIN: ${{ vars.PREV_WEBSITE_DOMAIN }}
+  MOCK_BASE_DOMAIN: ${{ vars.MOCK_BASE_DOMAIN }}
+
+  # Do nothing on pushes unless a recognized tag is present.
+  DEFAULT_DEPLOY: none
+
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+
+      # =========================================
+      # DETERMINE DEPLOYMENT TARGET
+      # =========================================
+      - name: Decide Deploy Target
+        id: deploy_target
+        shell: bash
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message || '' }}
+          MANUAL_DEPLOY_TARGET: ${{ github.event.inputs.deploy_target || '' }}
+          MANUAL_MOCK_DOMAIN: ${{ github.event.inputs.mock_domain || '' }}
+        run: |
+          set -euo pipefail
+
+          commit_message="$COMMIT_MESSAGE"
+          manual_target="$MANUAL_DEPLOY_TARGET"
+
+          target="$DEFAULT_DEPLOY"
+          repo=""
+          website_domain=""
+          website_url=""
+          live_uses_github_pages="false"
+
+          resolve_live_url() {
+            local live_repo_name
+
+            live_repo_name="${LIVE_DEPLOY_REPO##*/}"
+            live_repo_name="${live_repo_name%.git}"
+
+            if [[ "$LIVE_WEBSITE_DOMAIN" == *.github.io ]]; then
+              website_url="https://${LIVE_WEBSITE_DOMAIN}/${live_repo_name}/"
+              live_uses_github_pages="true"
+            else
+              website_url="https://${LIVE_WEBSITE_DOMAIN}"
+              live_uses_github_pages="false"
+            fi
+          }
+
+          echo "========================================="
+          echo " DEPLOYMENT REQUEST"
+          echo "========================================="
+          echo "Event:         ${{ github.event_name }}"
+          echo "Manual target: ${manual_target:-none}"
+          echo "Commit message:"
+          echo "$commit_message"
+          echo "========================================="
+
+          # -----------------------------------------
+          # Extract metadata from commit tags.
+          # -----------------------------------------
+          extract_tag_value() {
+            local tag_name="$1"
+
+            printf '%s\n' "$commit_message" |
+              grep -oiE "\\[${tag_name}:[[:space:]]*[^]]+\\]" |
+              head -n 1 |
+              sed -E \
+                "s/^\\[${tag_name}:[[:space:]]*//I;
+                 s/\\]$//;
+                 s/^[[:space:]]+//;
+                 s/[[:space:]]+$//"
+          }
+
+          # -----------------------------------------
+          # Resolve and validate mock domain.
+          # -----------------------------------------
+          resolve_mock_domain() {
+            local subdomain=""
+            local full_domain=""
+
+            subdomain="$(extract_tag_value "subdomain" || true)"
+            full_domain="$(extract_tag_value "domain" || true)"
+
+            if [[ -n "$subdomain" && -n "$full_domain" ]]; then
+              echo "ERROR: Use either [subdomain:...] or [domain:...], not both." >&2
+              exit 1
+            fi
+
+            if [[ -z "$subdomain" && -z "$full_domain" ]]; then
+              echo "ERROR: Mock mode requires one of these tags:" >&2
+              echo "  [subdomain:name]" >&2
+              echo "  [domain:full.example.com]" >&2
+              exit 1
+            fi
+
+            if [[ -n "$subdomain" ]]; then
+              subdomain="$(
+                printf '%s' "$subdomain" |
+                  tr '[:upper:]' '[:lower:]'
+              )"
+
+              if [[ ! "$subdomain" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+                echo "ERROR: Invalid mock subdomain: $subdomain" >&2
+                echo "Use letters, numbers, and hyphens only." >&2
+                echo "The value must start and end with a letter or number." >&2
+                exit 1
+              fi
+
+              printf '%s\n' "${subdomain}.${MOCK_BASE_DOMAIN}"
+              return
+            fi
+
+            full_domain="$(
+              printf '%s' "$full_domain" |
+                tr '[:upper:]' '[:lower:]'
+            )"
+
+            if [[ "$full_domain" == http://* || "$full_domain" == https://* ]]; then
+              echo "ERROR: [domain:...] must contain a hostname only." >&2
+              echo "Use: [domain:demo.example.com]" >&2
+              echo "Not: [domain:https://demo.example.com]" >&2
+              exit 1
+            fi
+
+            if [[ "$full_domain" == */* ]]; then
+              echo "ERROR: [domain:...] cannot contain a URL path." >&2
+              exit 1
+            fi
+
+            if [[ ! "$full_domain" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]]; then
+              echo "ERROR: Invalid full domain: $full_domain" >&2
+              exit 1
+            fi
+
+            printf '%s\n' "$full_domain"
+          }
+
+          # =========================================
+          # MANUAL WORKFLOW DISPATCH
+          # =========================================
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+
+            case "$manual_target" in
+
+              live)
+                target="live"
+                repo="$LIVE_DEPLOY_REPO"
+                website_domain="$LIVE_WEBSITE_DOMAIN"
+                resolve_live_url
+                ;;
+
+              prev)
+                if [[ "$PREV_REPO_EXISTS" != "true" ]]; then
+                  echo "ERROR: Preview repository is disabled."
+                  echo "PREV_REPO_EXISTS=$PREV_REPO_EXISTS"
+                  exit 1
+                fi
+
+                target="preview"
+                repo="$PREV_DEPLOY_REPO"
+                website_domain="$PREV_WEBSITE_DOMAIN"
+
+                preview_repo_name="${PREV_DEPLOY_REPO##*/}"
+                preview_repo_name="${preview_repo_name%.git}"
+
+                website_url="https://${website_domain}/${preview_repo_name}/"
+                ;;
+
+              auth-live)
+                target="auth-live"
+                repo="$LIVE_DEPLOY_REPO"
+                website_domain="$LIVE_WEBSITE_DOMAIN"
+                resolve_live_url
+                ;;
+
+              auth-prev)
+                if [[ "$PREV_REPO_EXISTS" != "true" ]]; then
+                  echo "ERROR: Preview repository is disabled."
+                  echo "PREV_REPO_EXISTS=$PREV_REPO_EXISTS"
+                  exit 1
+                fi
+
+                target="auth-prev"
+                repo="$PREV_DEPLOY_REPO"
+                website_domain="$PREV_WEBSITE_DOMAIN"
+
+                preview_repo_name="${PREV_DEPLOY_REPO##*/}"
+                preview_repo_name="${preview_repo_name%.git}"
+
+                website_url="https://${website_domain}/${preview_repo_name}/"
+                ;;
+
+              mock|auth-mock)
+                if [[ "$MOCK_REPO_EXISTS" != "true" ]]; then
+                  echo "ERROR: Mock repository is disabled."
+                  echo "MOCK_REPO_EXISTS=$MOCK_REPO_EXISTS"
+                  exit 1
+                fi
+
+                manual_mock_domain="$MANUAL_MOCK_DOMAIN"
+
+                if [[ -z "$manual_mock_domain" ]]; then
+                  echo "ERROR: Manual mock deployment requires Mock subdomain or full domain."
+                  exit 1
+                fi
+
+                manual_mock_domain="$(
+                  printf '%s' "$manual_mock_domain" |
+                    tr '[:upper:]' '[:lower:]'
+                )"
+
+                if [[ "$manual_mock_domain" == http://* || "$manual_mock_domain" == https://* || "$manual_mock_domain" == */* ]]; then
+                  echo "ERROR: Mock domain must be a hostname or subdomain only."
+                  exit 1
+                fi
+
+                if [[ "$manual_mock_domain" == *.* ]]; then
+                  if [[ ! "$manual_mock_domain" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$ ]]; then
+                    echo "ERROR: Invalid mock domain: $manual_mock_domain"
+                    exit 1
+                  fi
+                  website_domain="$manual_mock_domain"
+                else
+                  if [[ ! "$manual_mock_domain" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+                    echo "ERROR: Invalid mock subdomain: $manual_mock_domain"
+                    exit 1
+                  fi
+                  website_domain="${manual_mock_domain}.${MOCK_BASE_DOMAIN}"
+                fi
+
+                target="$manual_target"
+                repo="$MOCK_DEPLOY_REPO"
+                website_url="https://${website_domain}"
+                ;;
+
+              *)
+                echo "ERROR: Unknown manual deployment target: $manual_target"
+                exit 1
+                ;;
+
+            esac
+
+          else
+
+            # =========================================
+            # PUSH / COMMIT-TAG DEPLOYMENT
+            # =========================================
+
+            deploy_tags="$(
+              printf '%s\n' "$commit_message" |
+                grep -oiE \
+                  '\[deploy:(live|prev|mock|auth-live|auth-prev|auth-mock|false)\]' \
+                || true
+            )"
+
+            deploy_tag_count="$(
+              printf '%s\n' "$deploy_tags" |
+                sed '/^[[:space:]]*$/d' |
+                wc -l |
+                tr -d ' '
+            )"
+
+            if (( deploy_tag_count > 1 )); then
+              echo "ERROR: Multiple deployment tags were found:"
+              printf '%s\n' "$deploy_tags"
+              echo "Use exactly one deployment tag per commit."
+              exit 1
+            fi
+
+            if (( deploy_tag_count == 0 )) &&
+               printf '%s\n' "$commit_message" | grep -qi '\[deploy:'; then
+
+              echo "ERROR: An unrecognized [deploy:...] tag was found."
+              echo ""
+              echo "Valid tags:"
+              echo "  [deploy:live]"
+              echo "  [deploy:prev]"
+              echo "  [deploy:mock]"
+              echo "  [deploy:auth-live]"
+              echo "  [deploy:auth-prev]"
+              echo "  [deploy:auth-mock]"
+              echo "  [deploy:false]"
+              exit 1
+            fi
+
+            if printf '%s\n' "$commit_message" |
+               grep -qi '\[deploy:false\]'; then
+
+              target="none"
+
+            elif printf '%s\n' "$commit_message" |
+                 grep -qi '\[deploy:auth-live\]'; then
+
+              target="auth-live"
+              repo="$LIVE_DEPLOY_REPO"
+              website_domain="$LIVE_WEBSITE_DOMAIN"
+              resolve_live_url
+
+            elif printf '%s\n' "$commit_message" |
+                 grep -qi '\[deploy:auth-prev\]'; then
+
+              if [[ "$PREV_REPO_EXISTS" != "true" ]]; then
+                echo "ERROR: Preview repository is disabled."
+                echo "PREV_REPO_EXISTS=$PREV_REPO_EXISTS"
+                exit 1
+              fi
+
+              target="auth-prev"
+              repo="$PREV_DEPLOY_REPO"
+              website_domain="$PREV_WEBSITE_DOMAIN"
+
+              preview_repo_name="${PREV_DEPLOY_REPO##*/}"
+              preview_repo_name="${preview_repo_name%.git}"
+
+              website_url="https://${website_domain}/${preview_repo_name}/"
+
+            elif printf '%s\n' "$commit_message" |
+                 grep -qi '\[deploy:auth-mock\]'; then
+
+              if [[ "$MOCK_REPO_EXISTS" != "true" ]]; then
+                echo "ERROR: Mock repository is disabled."
+                echo "MOCK_REPO_EXISTS=$MOCK_REPO_EXISTS"
+                exit 1
+              fi
+
+              target="auth-mock"
+              repo="$MOCK_DEPLOY_REPO"
+              website_domain="$(resolve_mock_domain)"
+              website_url="https://${website_domain}"
+
+            elif printf '%s\n' "$commit_message" |
+                 grep -qi '\[deploy:live\]'; then
+
+              target="live"
+              repo="$LIVE_DEPLOY_REPO"
+              website_domain="$LIVE_WEBSITE_DOMAIN"
+              resolve_live_url
+
+            elif printf '%s\n' "$commit_message" |
+                 grep -qi '\[deploy:prev\]'; then
+
+              if [[ "$PREV_REPO_EXISTS" != "true" ]]; then
+                echo "ERROR: Preview repository is disabled."
+                echo "PREV_REPO_EXISTS=$PREV_REPO_EXISTS"
+                exit 1
+              fi
+
+              target="preview"
+              repo="$PREV_DEPLOY_REPO"
+              website_domain="$PREV_WEBSITE_DOMAIN"
+
+              preview_repo_name="${PREV_DEPLOY_REPO##*/}"
+              preview_repo_name="${preview_repo_name%.git}"
+
+              website_url="https://${website_domain}/${preview_repo_name}/"
+
+            elif printf '%s\n' "$commit_message" |
+                 grep -qi '\[deploy:mock\]'; then
+
+              if [[ "$MOCK_REPO_EXISTS" != "true" ]]; then
+                echo "ERROR: Mock repository is disabled."
+                echo "MOCK_REPO_EXISTS=$MOCK_REPO_EXISTS"
+                exit 1
+              fi
+
+              target="mock"
+              repo="$MOCK_DEPLOY_REPO"
+              website_domain="$(resolve_mock_domain)"
+              website_url="https://${website_domain}"
+
+            fi
+
+          fi
+
+          # =========================================
+          # VALIDATE RESOLVED CONFIGURATION
+          # =========================================
+
+          if [[ "$target" != "none" ]]; then
+
+            test -n "$repo" || {
+              echo "ERROR: Deployment repository resolved to an empty value."
+              exit 1
+            }
+
+            test -n "$website_domain" || {
+              echo "ERROR: Website domain resolved to an empty value."
+              exit 1
+            }
+
+            test -n "$website_url" || {
+              echo "ERROR: Website URL resolved to an empty value."
+              exit 1
+            }
+
+          fi
+
+          echo ""
+          echo "========================================="
+          echo " RESOLVED TARGET"
+          echo "========================================="
+          echo "Mode:       $target"
+          echo "Repository: ${repo:-none}"
+          echo "Domain:     ${website_domain:-none}"
+          echo "Website:    ${website_url:-none}"
+          echo "Source:     ${{ github.repository }}"
+          echo "Commit:     ${{ github.sha }}"
+          echo "========================================="
+
+          {
+            echo "target=$target"
+            echo "repo=$repo"
+            echo "website_domain=$website_domain"
+            echo "website_url=$website_url"
+            echo "live_uses_github_pages=$live_uses_github_pages"
+          } >> "$GITHUB_OUTPUT"
+
+
+      # =========================================
+      # CHECKOUT SOURCE
+      # =========================================
+      - name: Checkout Source Repository
+        if: >
+          steps.deploy_target.outputs.target == 'live' ||
+          steps.deploy_target.outputs.target == 'preview' ||
+          steps.deploy_target.outputs.target == 'mock'
+        uses: actions/checkout@v4
+
+
+      # =========================================
+      # RESOLVE PROJECT DIRECTORY
+      # =========================================
+      - name: Resolve Project Directory
+        id: project_dir
+        if: >
+          steps.deploy_target.outputs.target == 'live' ||
+          steps.deploy_target.outputs.target == 'preview' ||
+          steps.deploy_target.outputs.target == 'mock'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          highest_version="$(
+            find . -maxdepth 1 -mindepth 1 -type d \
+              -printf '%f\n' \
+              | grep -E '^[0-9]+(\.[0-9]+)*$' \
+              | sort -V \
+              | tail -n 1 \
+              || true
+          )"
+
+          if [[ -n "$highest_version" ]]; then
+            build_dir="$highest_version"
+            echo "Using highest version directory: $build_dir"
+          else
+            build_dir="."
+            echo "No numeric version directory found. Using repository root."
+          fi
+
+          if [[ ! -f "$build_dir/package.json" ]]; then
+            echo "ERROR: package.json not found in: $build_dir"
+            exit 1
+          fi
+
+          echo "build_dir=$build_dir" >> "$GITHUB_OUTPUT"
+
+
+      # =========================================
+      # NODE
+      # =========================================
+      - name: Setup Node.js
+        if: >
+          steps.deploy_target.outputs.target == 'live' ||
+          steps.deploy_target.outputs.target == 'preview' ||
+          steps.deploy_target.outputs.target == 'mock'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: ${{ steps.project_dir.outputs.build_dir }}/package-lock.json
+
+
+      # =========================================
+      # INSTALL DEPENDENCIES
+      # =========================================
+      - name: Install Dependencies
+        if: >
+          steps.deploy_target.outputs.target == 'live' ||
+          steps.deploy_target.outputs.target == 'preview' ||
+          steps.deploy_target.outputs.target == 'mock'
+        working-directory: ${{ steps.project_dir.outputs.build_dir }}
+        run: npm ci --legacy-peer-deps
+
+
+      # =========================================
+      # BUILD GATSBY
+      # =========================================
+      - name: Build Gatsby Site
+        if: >
+          steps.deploy_target.outputs.target == 'live' ||
+          steps.deploy_target.outputs.target == 'preview' ||
+          steps.deploy_target.outputs.target == 'mock'
+        working-directory: ${{ steps.project_dir.outputs.build_dir }}
+        run: npx gatsby build
+
+
+      # =========================================
+      # CNAME: LIVE
+      # =========================================
+      - name: Configure Live CNAME
+        if: steps.deploy_target.outputs.target == 'live'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          CNAME_FILE="${{ steps.project_dir.outputs.build_dir }}/public/CNAME"
+
+          if [[ "${{ steps.deploy_target.outputs.live_uses_github_pages }}" == "true" ]]; then
+            rm -f "$CNAME_FILE"
+            echo "Live GitHub Pages URL selected. CNAME removed."
+          else
+            printf '%s\n' \
+              "${{ steps.deploy_target.outputs.website_domain }}" \
+              > "$CNAME_FILE"
+
+            echo "Live CNAME:"
+            cat "$CNAME_FILE"
+          fi
+
+
+      # =========================================
+      # CNAME: PREVIEW
+      # =========================================
+      - name: Remove CNAME From Preview Build
+        if: steps.deploy_target.outputs.target == 'preview'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rm -f "${{ steps.project_dir.outputs.build_dir }}/public/CNAME"
+
+          echo "Preview CNAME removed."
+
+
+      # =========================================
+      # CNAME: MOCK
+      # =========================================
+      - name: Write Mock CNAME
+        if: steps.deploy_target.outputs.target == 'mock'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mock_domain="${{ steps.deploy_target.outputs.website_domain }}"
+
+          test -n "$mock_domain" || {
+            echo "ERROR: Mock website domain was not resolved."
+            exit 1
+          }
+
+          printf '%s\n' \
+            "$mock_domain" \
+            > "${{ steps.project_dir.outputs.build_dir }}/public/CNAME"
+
+          echo "Mock CNAME:"
+          cat "${{ steps.project_dir.outputs.build_dir }}/public/CNAME"
+
+
+      # =========================================
+      # SSH: LIVE DEPLOYMENT
+      # =========================================
+      - name: Configure Live Deployment Key
+        if: steps.deploy_target.outputs.target == 'live'
+        shell: bash
+        env:
+          DEPLOY_PRIVATE_KEY: ${{ secrets.ACTIONS_DEPLOY_LIVE }}
+        run: |
+          set -euo pipefail
+
+          test -n "$DEPLOY_PRIVATE_KEY" || {
+            echo "Missing Actions secret: ACTIONS_DEPLOY_LIVE"
+            exit 1
+          }
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "$DEPLOY_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+
+      # =========================================
+      # SSH: PREVIEW DEPLOYMENT
+      # =========================================
+      - name: Configure Preview Deployment Key
+        if: steps.deploy_target.outputs.target == 'preview'
+        shell: bash
+        env:
+          DEPLOY_PRIVATE_KEY: ${{ secrets.ACTIONS_DEPLOY_PREV }}
+        run: |
+          set -euo pipefail
+
+          test -n "$DEPLOY_PRIVATE_KEY" || {
+            echo "Missing Actions secret: ACTIONS_DEPLOY_PREV"
+            exit 1
+          }
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "$DEPLOY_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+
+      # =========================================
+      # SSH: MOCK DEPLOYMENT
+      # =========================================
+      - name: Configure Mock Deployment Key
+        if: steps.deploy_target.outputs.target == 'mock'
+        shell: bash
+        env:
+          DEPLOY_PRIVATE_KEY: ${{ secrets.ACTIONS_DEPLOY_MOCK }}
+        run: |
+          set -euo pipefail
+
+          test -n "$DEPLOY_PRIVATE_KEY" || {
+            echo "Missing Actions secret: ACTIONS_DEPLOY_MOCK"
+            exit 1
+          }
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "$DEPLOY_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+
+      # =========================================
+      # DEPLOY SELECTED BUILD
+      # =========================================
+      - name: Deploy Gatsby Build
+        if: >
+          steps.deploy_target.outputs.target == 'live' ||
+          steps.deploy_target.outputs.target == 'preview' ||
+          steps.deploy_target.outputs.target == 'mock'
+        shell: bash
+        env:
+          DEPLOY_REPO: ${{ steps.deploy_target.outputs.repo }}
+          DEPLOY_TARGET: ${{ steps.deploy_target.outputs.target }}
+          DEPLOY_DOMAIN: ${{ steps.deploy_target.outputs.website_domain }}
+          DEPLOY_WEBSITE_URL: ${{ steps.deploy_target.outputs.website_url }}
+
+          GIT_SSH_COMMAND: >-
+            ssh
+            -i ~/.ssh/deploy_key
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+        run: |
+          set -euo pipefail
+
+          test -n "$DEPLOY_REPO" || {
+            echo "ERROR: No deployment repository was selected."
+            exit 1
+          }
+
+          test -n "$DEPLOY_WEBSITE_URL" || {
+            echo "ERROR: No deployment website URL was selected."
+            exit 1
+          }
+
+          BUILD_DIR="${{ steps.project_dir.outputs.build_dir }}"
+          PUBLIC_DIR="$BUILD_DIR/public"
+
+          test -d "$PUBLIC_DIR" || {
+            echo "ERROR: Gatsby public directory does not exist: $PUBLIC_DIR"
+            exit 1
+          }
+
+          echo "========================================="
+          echo " DEPLOYING"
+          echo "========================================="
+          echo "Target:     $DEPLOY_TARGET"
+          echo "Repository: $DEPLOY_REPO"
+          echo "Domain:     $DEPLOY_DOMAIN"
+          echo "Website:    $DEPLOY_WEBSITE_URL"
+          echo "Source:     ${{ github.repository }}"
+          echo "Commit:     ${{ github.sha }}"
+          echo "========================================="
+
+          cd "$PUBLIC_DIR"
+
+          git init
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+          git checkout -B main
+          git remote add origin "$DEPLOY_REPO"
+
+          git add --all
+
+          git commit \
+            -m "Deploy ${DEPLOY_TARGET} from V5 source at ${{ github.sha }}"
+
+          git push --force origin main
+
+          echo ""
+          echo "Deployment completed successfully."
+          echo "Website: $DEPLOY_WEBSITE_URL"
+
+
+      # =========================================
+      # AUTH TARGET SUMMARY
+      # =========================================
+      - name: Show Authentication Test Target
+        if: >
+          steps.deploy_target.outputs.target == 'auth-live' ||
+          steps.deploy_target.outputs.target == 'auth-prev' ||
+          steps.deploy_target.outputs.target == 'auth-mock'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "========================================="
+          echo " AUTHENTICATION TEST TARGET"
+          echo "========================================="
+          echo "Mode:       ${{ steps.deploy_target.outputs.target }}"
+          echo "Repository: ${{ steps.deploy_target.outputs.repo }}"
+          echo "Domain:     ${{ steps.deploy_target.outputs.website_domain }}"
+          echo "Website:    ${{ steps.deploy_target.outputs.website_url }}"
+          echo "Source:     ${{ github.repository }}"
+          echo "Commit:     ${{ github.sha }}"
+          echo ""
+          echo "No deployment will be performed."
+          echo "========================================="
+
+
+      # =========================================
+      # AUTH: LIVE KEY
+      # =========================================
+      - name: Configure Live Authentication Key
+        if: steps.deploy_target.outputs.target == 'auth-live'
+        shell: bash
+        env:
+          LIVE_PRIVATE_KEY: ${{ secrets.ACTIONS_DEPLOY_LIVE }}
+        run: |
+          set -euo pipefail
+
+          test -n "$LIVE_PRIVATE_KEY" || {
+            echo "Missing Actions secret: ACTIONS_DEPLOY_LIVE"
+            exit 1
+          }
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "$LIVE_PRIVATE_KEY" > ~/.ssh/deploy_live
+          chmod 600 ~/.ssh/deploy_live
+
+          ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+
+      # =========================================
+      # AUTH: LIVE TEST
+      # =========================================
+      - name: Test Live Authentication
+        if: steps.deploy_target.outputs.target == 'auth-live'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Testing V5 authentication to LIVE repository..."
+          echo "Repository: ${{ steps.deploy_target.outputs.repo }}"
+          echo "Domain:     ${{ steps.deploy_target.outputs.website_domain }}"
+          echo "Website:    ${{ steps.deploy_target.outputs.website_url }}"
+
+          GIT_SSH_COMMAND="ssh \
+            -i ~/.ssh/deploy_live \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes" \
+          git ls-remote \
+            "${{ steps.deploy_target.outputs.repo }}" \
+            HEAD > /dev/null
+
+          echo "V5 LIVE authentication: OK"
+
+
+      # =========================================
+      # AUTH: PREVIEW KEY
+      # =========================================
+      - name: Configure Preview Authentication Key
+        if: steps.deploy_target.outputs.target == 'auth-prev'
+        shell: bash
+        env:
+          PREV_PRIVATE_KEY: ${{ secrets.ACTIONS_DEPLOY_PREV }}
+        run: |
+          set -euo pipefail
+
+          test -n "$PREV_PRIVATE_KEY" || {
+            echo "Missing Actions secret: ACTIONS_DEPLOY_PREV"
+            exit 1
+          }
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "$PREV_PRIVATE_KEY" > ~/.ssh/deploy_preview
+          chmod 600 ~/.ssh/deploy_preview
+
+          ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+
+      # =========================================
+      # AUTH: PREVIEW TEST
+      # =========================================
+      - name: Test Preview Authentication
+        if: steps.deploy_target.outputs.target == 'auth-prev'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Testing V5 authentication to PREVIEW repository..."
+          echo "Repository: ${{ steps.deploy_target.outputs.repo }}"
+          echo "Domain:     ${{ steps.deploy_target.outputs.website_domain }}"
+          echo "Website:    ${{ steps.deploy_target.outputs.website_url }}"
+
+          GIT_SSH_COMMAND="ssh \
+            -i ~/.ssh/deploy_preview \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes" \
+          git ls-remote \
+            "${{ steps.deploy_target.outputs.repo }}" \
+            HEAD > /dev/null
+
+          echo "V5 PREVIEW authentication: OK"
+
+
+      # =========================================
+      # AUTH: MOCK KEY
+      # =========================================
+      - name: Configure Mock Authentication Key
+        if: steps.deploy_target.outputs.target == 'auth-mock'
+        shell: bash
+        env:
+          MOCK_PRIVATE_KEY: ${{ secrets.ACTIONS_DEPLOY_MOCK }}
+        run: |
+          set -euo pipefail
+
+          test -n "$MOCK_PRIVATE_KEY" || {
+            echo "Missing Actions secret: ACTIONS_DEPLOY_MOCK"
+            exit 1
+          }
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s\n' "$MOCK_PRIVATE_KEY" > ~/.ssh/deploy_mock
+          chmod 600 ~/.ssh/deploy_mock
+
+          ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+
+      # =========================================
+      # AUTH: MOCK TEST
+      # =========================================
+      - name: Test Mock Authentication
+        if: steps.deploy_target.outputs.target == 'auth-mock'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "Testing V5 authentication to MOCK repository..."
+          echo "Repository: ${{ steps.deploy_target.outputs.repo }}"
+          echo "Domain:     ${{ steps.deploy_target.outputs.website_domain }}"
+          echo "Website:    ${{ steps.deploy_target.outputs.website_url }}"
+
+          GIT_SSH_COMMAND="ssh \
+            -i ~/.ssh/deploy_mock \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes" \
+          git ls-remote \
+            "${{ steps.deploy_target.outputs.repo }}" \
+            HEAD > /dev/null
+
+          echo "V5 MOCK authentication: OK"
+
+
+      # =========================================
+      # DEPLOYMENT JOB SUMMARY
+      # =========================================
+      - name: Write Deployment Summary
+        if: >
+          steps.deploy_target.outputs.target == 'live' ||
+          steps.deploy_target.outputs.target == 'preview' ||
+          steps.deploy_target.outputs.target == 'mock'
+        shell: bash
+        run: |
+          {
+            echo "## Gatsby Deployment"
+            echo ""
+            echo "| Property | Value |"
+            echo "|---|---|"
+            echo "| Result | Successful |"
+            echo '| Source | `${{ github.repository }}` |'
+            echo '| Target | `${{ steps.deploy_target.outputs.target }}` |'
+            echo '| Commit | `${{ github.sha }}` |'
+            echo '| Repository | `${{ steps.deploy_target.outputs.repo }}` |'
+            echo '| Domain | `${{ steps.deploy_target.outputs.website_domain }}` |'
+            echo "| Website | ${{ steps.deploy_target.outputs.website_url }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+
+      # =========================================
+      # AUTHENTICATION JOB SUMMARY
+      # =========================================
+      - name: Write Authentication Test Summary
+        if: >
+          steps.deploy_target.outputs.target == 'auth-live' ||
+          steps.deploy_target.outputs.target == 'auth-prev' ||
+          steps.deploy_target.outputs.target == 'auth-mock'
+        shell: bash
+        run: |
+          {
+            echo "## Deployment Authentication Test"
+            echo ""
+            echo "| Property | Value |"
+            echo "|---|---|"
+            echo "| Result | Passed |"
+            echo '| Source | `${{ github.repository }}` |'
+            echo '| Mode | `${{ steps.deploy_target.outputs.target }}` |'
+            echo '| Commit | `${{ github.sha }}` |'
+            echo '| Repository | `${{ steps.deploy_target.outputs.repo }}` |'
+            echo '| Domain | `${{ steps.deploy_target.outputs.website_domain }}` |'
+            echo "| Website | ${{ steps.deploy_target.outputs.website_url }} |"
+            echo ""
+            echo "No deployment was performed."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+
+      # =========================================
+      # EXPLICIT NO-DEPLOY RESULT
+      # =========================================
+      - name: Deployment Skipped
+        if: steps.deploy_target.outputs.target == 'none'
+        shell: bash
+        run: |
+          echo "No deployment performed."
+          echo ""
+          echo "Available commit commands:"
+          echo ""
+          echo "  [deploy:live]"
+          echo "  [deploy:prev]"
+          echo "  [deploy:mock] [subdomain:example]"
+          echo "  [deploy:mock] [domain:demo.example.com]"
+          echo ""
+          echo "  [deploy:auth-live]"
+          echo "  [deploy:auth-prev]"
+          echo "  [deploy:auth-mock] [subdomain:example]"
+          echo "  [deploy:auth-mock] [domain:demo.example.com]"
+          echo ""
+          echo "  [deploy:false]"
